@@ -142,7 +142,7 @@ int sys_execv(userptr_t program, userptr_t args)
   }
 
   /* Switch to it and activate it. */
-  curproc_setas(as);
+  struct addrspace *old_as = curproc_setas(as);
   as_activate();
 
   /* Load the executable. */
@@ -200,12 +200,14 @@ int sys_execv(userptr_t program, userptr_t args)
     }
     stacktop += 4;
   }
-  err = copyout(NULL, (userptr_t)stacktop, 4);
+  void *ptr = NULL;
+  err = copyout((void *)&ptr, (userptr_t)stacktop, 4);
   if (err)
   {
     return err;
   }
 
+  as_destroy(old_as);
   kfree(progname);
   for (unsigned i = 0; i <= argc; i++)
   {
