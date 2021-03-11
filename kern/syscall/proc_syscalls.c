@@ -69,74 +69,157 @@ int sys_fork(struct trapframe *tf, pid_t *retval)
   return 0;
 }
 
-int sys_execv(const char *program, char **args){
-  (void)args;
+int sys_execv(userptr_t program, userptr_t args)
+{
+  struct addrspace *as;
+  struct vnode *v;
+  vaddr_t entrypoint, stackptr;
+  int result;
 
-	struct addrspace *as;
-	struct vnode *v;
-	vaddr_t entrypoint, stackptr;
-	int result;
+  unsigned argc = 0;
+  char **argv;
 
-  int err;
-  size_t dummy;
+  int err, dummy;
 
+  /* copy program name */
   char *progname = kmalloc(128 * sizeof(char));
-  if(progname == NULL){
+  if (progname == NULL)
+  {
     return ENOMEM;
   }
-  err = copyinstr((const_userptr_t)program, progname, 128, &dummy);
-  if(err){
-    kfree(progname);
+  err = copyinstr(program, progname, 128, (size_t *)&dummy);
+  if (err)
+  {
     return err;
   }
 
-  // Copied from runprogram 
-	/* Open the file. */
-	result = vfs_open(progname, O_RDONLY, 0, &v);
-	if (result) {
-		return result;
-	}
+  /* copy argv */
+  argv = kmalloc(128 * sizeof(char *));
+  if (argv == NULL)
+  {
+    return ENOMEM;
+  }
 
-	/* Create a new address space. */
-	as = as_create();
-	if (as == NULL) {
-		vfs_close(v);
-		return ENOMEM;
-	}
+  for (int i = 0;; i++)
+  {
+    argv[i] = kmalloc(128 * sizeof(char));
+    if (argv[i] == NULL)
+    {
+      return ENOMEM;
+    }
+    char *ptr;
+    err = copyin((userptr_t)(args + 4 * i), (void *)&ptr, 4);
+    if (err)
+    {
+      return err;
+    }
+    if (ptr == NULL)
+    {
+      break;
+    }
+    argc++;
+    err = copyinstr((userptr_t)ptr, argv[i], 128, (size_t *)&dummy);
+    if (err)
+    {
+      return err;
+    }
+  }
 
-	/* Switch to it and activate it. */
-	curproc_setas(as);
-	as_activate();
+  // Copied from runprogram
+  /* Open the file. */
+  result = vfs_open(progname, O_RDONLY, 0, &v);
+  if (result)
+  {
+    return result;
+  }
 
-	/* Load the executable. */
-	result = load_elf(v, &entrypoint);
-	if (result) {
-		/* p_addrspace will go away when curproc is destroyed */
-		vfs_close(v);
-		return result;
-	}
+  /* Create a new address space. */
+  as = as_create();
+  if (as == NULL)
+  {
+    vfs_close(v);
+    return ENOMEM;
+  }
 
-	/* Done with the file now. */
-	vfs_close(v);
+  /* Switch to it and activate it. */
+  curproc_setas(as);
+  as_activate();
 
+  /* Load the executable. */
+  result = load_elf(v, &entrypoint);
+  if (result)
+  {
+    /* p_addrspace will go away when curproc is destroyed */
+    vfs_close(v);
+    return result;
+  }
 
-	/* Define the user stack in the address space */
-	result = as_define_stack(as, &stackptr);
-	if (result) {
-		/* p_addrspace will go away when curproc is destroyed */
-		return result;
-	}
-  // End of Copied from runprogram 
+  /* Done with the file now. */
+  vfs_close(v);
 
+  /* Define the user stack in the address space */
+  result = as_define_stack(as, &stackptr);
+  if (result)
+  {
+    /* p_addrspace will go away when curproc is destroyed */
+    return result;
+  }
+  // End of Copied from runprogram
 
+  struct array *stackptrs = array_create();
+  userptr_t stacktop = (userptr_t)stackptr;
 
-	/* Warp to user mode. */
-	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
-	
-	/* enter_new_process does not return. */
-	panic("enter_new_process returned\n");
-	return EINVAL;
+  // argv
+  for (unsigned i = 0; i < argc; i++)
+  {
+    char *arg = argv[i];
+    stacktop -= strlen(arg) + 1;
+    err = array_add(stackptrs, (void *)stacktop, (unsigned *)&dummy);
+    if (err)
+    {
+      return err;
+    }
+    err = copyoutstr(arg, stacktop, 128, (size_t *)&dummy);
+    if (err)
+    {
+      return err;
+    }
+  }
+
+  // pointers
+  stacktop = (userptr_t)(ROUNDUP((unsigned)stacktop, 8) - 16);
+  stacktop -= 8 * ROUNDUP(argc + 2, 2);
+  userptr_t top = stacktop;
+  for (unsigned i = 0; i < argc; i++)
+  {
+    userptr_t ptr = array_get(stackptrs, i);
+    err = copyout((void *)&ptr, (userptr_t)stacktop, 4);
+    if (err)
+    {
+      return err;
+    }
+    stacktop += 4;
+  }
+  err = copyout(NULL, (userptr_t)stacktop, 4);
+  if (err)
+  {
+    return err;
+  }
+
+  kfree(progname);
+  for (unsigned i = 0; i <= argc; i++)
+  {
+    kfree(argv[i]);
+  }
+  kfree(argv);
+
+  /* Warp to user mode. */
+  enter_new_process(argc, top,
+                    (vaddr_t)top, entrypoint);
+
+  /* enter_new_process does not return. */
+  panic("enter_new_process returned\n");
+  return EINVAL;
 }
 
 #endif
@@ -176,9 +259,11 @@ void sys__exit(int exitcode)
   }
   else
   {
+    lock_acquire(p->p_Lock);
     p->status = Zombie;
     p->exitcode = exitcode;
     cv_broadcast(p->p_cv, p->parent->p_Lock);
+    lock_release(p->p_Lock);
   }
 #else
   /* if this is the last user process in the system, proc_destroy()
@@ -229,7 +314,6 @@ int sys_waitpid(pid_t pid,
     return (EINVAL);
   }
 #if OPT_A2
-  DEBUG(DB_SYSCALL, "Syscall: %d waitpid(%d)\n", curproc->pid, pid);
   bool hasChild = false;
   struct proc *parent = curproc;
   lock_acquire(parent->p_Lock);
