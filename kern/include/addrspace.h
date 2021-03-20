@@ -34,11 +34,10 @@
  * Address space structure and operations.
  */
 
-
 #include <vm.h>
+#include "opt-A2.h"
 
 struct vnode;
-
 
 /* 
  * Address space - data structure associated with the virtual memory
@@ -47,7 +46,8 @@ struct vnode;
  * You write this.
  */
 
-struct addrspace {
+struct addrspace
+{
   vaddr_t as_vbase1;
   paddr_t as_pbase1;
   size_t as_npages1;
@@ -55,6 +55,9 @@ struct addrspace {
   paddr_t as_pbase2;
   size_t as_npages2;
   paddr_t as_stackpbase;
+#if OPT_A2
+  bool loaded;
+#endif
 };
 
 /*
@@ -94,20 +97,19 @@ struct addrspace {
  */
 
 struct addrspace *as_create(void);
-int               as_copy(struct addrspace *src, struct addrspace **ret);
-void              as_activate(void);
-void              as_deactivate(void);
-void              as_destroy(struct addrspace *);
+int as_copy(struct addrspace *src, struct addrspace **ret);
+void as_activate(void);
+void as_deactivate(void);
+void as_destroy(struct addrspace *);
 
-int               as_define_region(struct addrspace *as, 
-                                   vaddr_t vaddr, size_t sz,
-                                   int readable, 
-                                   int writeable,
-                                   int executable);
-int               as_prepare_load(struct addrspace *as);
-int               as_complete_load(struct addrspace *as);
-int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
-
+int as_define_region(struct addrspace *as,
+                     vaddr_t vaddr, size_t sz,
+                     int readable,
+                     int writeable,
+                     int executable);
+int as_prepare_load(struct addrspace *as);
+int as_complete_load(struct addrspace *as);
+int as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
 
 /*
  * Functions in loadelf.c
@@ -117,6 +119,5 @@ int               as_define_stack(struct addrspace *as, vaddr_t *initstackptr);
  */
 
 int load_elf(struct vnode *v, vaddr_t *entrypoint);
-
 
 #endif /* _ADDRSPACE_H_ */
