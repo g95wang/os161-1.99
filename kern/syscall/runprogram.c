@@ -44,6 +44,8 @@
 #include <vfs.h>
 #include <syscall.h>
 #include <test.h>
+#include <copyinout.h>
+#include "opt-A2.h"
 
 /*
  * Load program "progname" and start running it in usermode.
@@ -51,8 +53,11 @@
  *
  * Calls vfs_open on progname and thus may destroy it.
  */
-int
-runprogram(char *progname)
+#if OPT_A2
+int runprogram(char *progname, char **args, unsigned long argc)
+#else
+int runprogram(char *progname)
+#endif
 {
 	struct addrspace *as;
 	struct vnode *v;
@@ -61,7 +66,8 @@ runprogram(char *progname)
 
 	/* Open the file. */
 	result = vfs_open(progname, O_RDONLY, 0, &v);
-	if (result) {
+	if (result)
+	{
 		return result;
 	}
 
@@ -70,7 +76,8 @@ runprogram(char *progname)
 
 	/* Create a new address space. */
 	as = as_create();
-	if (as ==NULL) {
+	if (as == NULL)
+	{
 		vfs_close(v);
 		return ENOMEM;
 	}
@@ -81,7 +88,8 @@ runprogram(char *progname)
 
 	/* Load the executable. */
 	result = load_elf(v, &entrypoint);
-	if (result) {
+	if (result)
+	{
 		/* p_addrspace will go away when curproc is destroyed */
 		vfs_close(v);
 		return result;
@@ -92,17 +100,65 @@ runprogram(char *progname)
 
 	/* Define the user stack in the address space */
 	result = as_define_stack(as, &stackptr);
-	if (result) {
+	if (result)
+	{
 		/* p_addrspace will go away when curproc is destroyed */
 		return result;
 	}
+#if OPT_A2
+	int err, dummy;
+
+	struct array *stackptrs = array_create();
+	userptr_t stacktop = (userptr_t)stackptr;
+
+	// args
+	for (unsigned i = 0; i < argc; i++)
+	{
+		char *arg = args[i];
+		stacktop -= strlen(arg) + 1;
+		err = array_add(stackptrs, (void *)stacktop, (unsigned *)&dummy);
+		if (err)
+		{
+			return err;
+		}
+		err = copyoutstr(arg, stacktop, 128, (size_t *)&dummy);
+		if (err)
+		{
+			return err;
+		}
+	}
+
+	// pointers
+	stacktop = (userptr_t)(ROUNDUP((unsigned)stacktop, 8) - 16);
+	stacktop -= 8 * ROUNDUP(argc + 2, 2);
+	userptr_t top = stacktop;
+	for (unsigned i = 0; i < argc; i++)
+	{
+		userptr_t ptr = array_get(stackptrs, i);
+		err = copyout((void *)&ptr, (userptr_t)stacktop, 4);
+		if (err)
+		{
+			return err;
+		}
+		stacktop += 4;
+	}
+	void *ptr = NULL;
+	err = copyout((void *)&ptr, (userptr_t)stacktop, 4);
+	if (err)
+	{
+		return err;
+	}
 
 	/* Warp to user mode. */
+	enter_new_process(argc, top,
+					  (vaddr_t)top, entrypoint);
+#else
+	/* Warp to user mode. */
 	enter_new_process(0 /*argc*/, NULL /*userspace addr of argv*/,
-			  stackptr, entrypoint);
-	
+					  stackptr, entrypoint);
+#endif
+
 	/* enter_new_process does not return. */
 	panic("enter_new_process returned\n");
 	return EINVAL;
 }
-

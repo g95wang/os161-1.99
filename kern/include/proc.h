@@ -38,6 +38,15 @@
 
 #include <spinlock.h>
 #include <thread.h> /* required for struct threadarray */
+#include <array.h>
+#include <synch.h>
+#include "opt-A2.h"
+
+#if OPT_A2
+typedef bool status_t;
+#define Alive 0
+#define Zombie 1
+#endif
 
 struct addrspace;
 struct vnode;
@@ -48,24 +57,37 @@ struct semaphore;
 /*
  * Process structure.
  */
-struct proc {
-	char *p_name;			/* Name of this process */
-	struct spinlock p_lock;		/* Lock for this structure */
-	struct threadarray p_threads;	/* Threads in this process */
+struct proc
+{
+	char *p_name; /* Name of this process */
+
+	struct spinlock p_lock; /* Lock for this structure */
+
+	struct threadarray p_threads; /* Threads in this process */
 
 	/* VM */
-	struct addrspace *p_addrspace;	/* virtual address space */
+	struct addrspace *p_addrspace; /* virtual address space */
 
 	/* VFS */
-	struct vnode *p_cwd;		/* current working directory */
+	struct vnode *p_cwd; /* current working directory */
+
+#if OPT_A2
+	pid_t pid;
+	struct lock *p_Lock;
+	struct proc *parent;
+	struct array *children;
+	status_t status;
+	struct cv *p_cv;
+	int exitcode;
+#endif
 
 #ifdef UW
-  /* a vnode to refer to the console device */
-  /* this is a quick-and-dirty way to get console writes working */
-  /* you will probably need to change this when implementing file-related
+	/* a vnode to refer to the console device */
+	/* this is a quick-and-dirty way to get console writes working */
+	/* you will probably need to change this when implementing file-related
      system calls, since each process will need to keep track of all files
      it has opened, not just the console. */
-  struct vnode *console;                /* a vnode for the console device */
+	struct vnode *console; /* a vnode for the console device */
 #endif
 
 	/* add more material here as needed */
@@ -99,6 +121,5 @@ struct addrspace *curproc_getas(void);
 
 /* Change the address space of the current process, and return the old one. */
 struct addrspace *curproc_setas(struct addrspace *);
-
 
 #endif /* _PROC_H_ */

@@ -20,17 +20,17 @@
  * You will need to improve this implementation
  */
 
-int
-sys_write(int fdesc,userptr_t ubuf,unsigned int nbytes,int *retval)
+int sys_write(int fdesc, userptr_t ubuf, unsigned int nbytes, int *retval)
 {
   struct iovec iov;
   struct uio u;
   int res;
 
-  DEBUG(DB_SYSCALL,"Syscall: write(%d,%x,%d)\n",fdesc,(unsigned int)ubuf,nbytes);
-  
+  // DEBUG(DB_SYSCALL,"Syscall: write(%d,%x,%d)\n",fdesc,(unsigned int)ubuf,nbytes);
+
   /* only stdout and stderr writes are currently implemented */
-  if (!((fdesc==STDOUT_FILENO)||(fdesc==STDERR_FILENO))) {
+  if (!((fdesc == STDOUT_FILENO) || (fdesc == STDERR_FILENO)))
+  {
     return EUNIMP;
   }
   KASSERT(curproc != NULL);
@@ -42,14 +42,15 @@ sys_write(int fdesc,userptr_t ubuf,unsigned int nbytes,int *retval)
   iov.iov_len = nbytes;
   u.uio_iov = &iov;
   u.uio_iovcnt = 1;
-  u.uio_offset = 0;  /* not needed for the console */
+  u.uio_offset = 0; /* not needed for the console */
   u.uio_resid = nbytes;
   u.uio_segflg = UIO_USERSPACE;
   u.uio_rw = UIO_WRITE;
   u.uio_space = curproc->p_addrspace;
 
-  res = VOP_WRITE(curproc->console,&u);
-  if (res) {
+  res = VOP_WRITE(curproc->console, &u);
+  if (res)
+  {
     return res;
   }
 
