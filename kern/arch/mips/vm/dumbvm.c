@@ -51,22 +51,100 @@
  * Wrap rma_stealmem in a spinlock.
  */
 static struct spinlock stealmem_lock = SPINLOCK_INITIALIZER;
+#if OPT_A3
+static struct spinlock coremap_lock = SPINLOCK_INITIALIZER;
+static int *coremap;
+static unsigned long frame_num;
+static paddr_t frame_start;
+static bool ram_finished = false;
+#else
+#endif
 
 void vm_bootstrap(void)
 {
-	/* Do nothing. */
+#if OPT_A3
+	paddr_t lo, hi;
+	ram_getsize(&lo, &hi);
+	KASSERT(lo != 0);
+	KASSERT(hi != 0);
+
+	frame_num = DIVROUNDUP(hi - lo, PAGE_SIZE);
+	coremap = (int *)PADDR_TO_KVADDR(lo);
+	for (unsigned long i = 0; i < frame_num; i++)
+	{
+		coremap[i] = 0;
+	}
+	int start = (int)(lo + frame_num * sizeof(int));
+	frame_start = (paddr_t)ROUNDUP(start, PAGE_SIZE);
+	ram_finished = true;
+#endif
 }
+
+#if OPT_A3
+paddr_t
+coremap_stealmem(unsigned long npages)
+{
+	for (unsigned long i = 0; i < frame_num; i++)
+	{
+		if (coremap[i] != 0)
+		{
+			continue;
+		}
+		unsigned long length = 0;
+		while (length < npages)
+		{
+			if (coremap[i + length] == 0)
+			{
+				length++;
+			}
+			else
+			{
+				break;
+			}
+		}
+		if (length != npages)
+		{
+			continue;
+		}
+		for (length = 0; length < npages; length++)
+		{
+			coremap[i + length] = length + 1;
+		}
+		return frame_start + i * PAGE_SIZE;
+	}
+	return 0;
+}
+#endif
 
 static paddr_t
 getppages(unsigned long npages)
 {
 	paddr_t addr;
+#if OPT_A3
+	if (ram_finished)
+	{
+		spinlock_acquire(&coremap_lock);
 
+		addr = coremap_stealmem(npages);
+
+		spinlock_release(&coremap_lock);
+	}
+	else
+	{
+		spinlock_acquire(&stealmem_lock);
+
+		addr = ram_stealmem(npages);
+
+		spinlock_release(&stealmem_lock);
+	}
+
+#else
 	spinlock_acquire(&stealmem_lock);
 
 	addr = ram_stealmem(npages);
 
 	spinlock_release(&stealmem_lock);
+#endif
 	return addr;
 }
 
@@ -85,9 +163,30 @@ alloc_kpages(int npages)
 
 void free_kpages(vaddr_t addr)
 {
+#if OPT_A3
+	paddr_t paddr = KVADDR_TO_PADDR(addr);
+	KASSERT(paddr >= frame_start);
+	unsigned long index = DIVROUNDUP(paddr - frame_start, PAGE_SIZE);
+	KASSERT(coremap[index] > 0);
+
+	unsigned long npages = 0;
+	spinlock_acquire(&coremap_lock);
+	for (unsigned long i = index - coremap[index] + 1;; i++)
+	{
+		npages++;
+		int old = coremap[i];
+		coremap[i] = 0;
+		if (coremap[i + 1] != old + 1)
+		{
+			break;
+		}
+	}
+	spinlock_release(&coremap_lock);
+#else
 	/* nothing - leak the memory. */
 
 	(void)addr;
+#endif
 }
 
 void vm_tlbshootdown_all(void)
