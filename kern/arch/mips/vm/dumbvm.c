@@ -169,11 +169,9 @@ void free_kpages(vaddr_t addr)
 	unsigned long index = DIVROUNDUP(paddr - frame_start, PAGE_SIZE);
 	KASSERT(coremap[index] > 0);
 
-	unsigned long npages = 0;
 	spinlock_acquire(&coremap_lock);
 	for (unsigned long i = index - coremap[index] + 1;; i++)
 	{
-		npages++;
 		int old = coremap[i];
 		coremap[i] = 0;
 		if (coremap[i + 1] != old + 1)
@@ -362,6 +360,11 @@ as_create(void)
 
 void as_destroy(struct addrspace *as)
 {
+	#ifdef OPT_A3
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase1));
+	free_kpages(PADDR_TO_KVADDR(as->as_pbase2));
+	free_kpages(PADDR_TO_KVADDR(as->as_stackpbase));
+	#endif
 	kfree(as);
 }
 
